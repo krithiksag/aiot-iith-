@@ -1,0 +1,78 @@
+import cv2
+import numpy as np
+import json
+import serial
+import time
+
+# Initialize the serial port
+ser = serial.Serial('COM8', 9600)
+
+# Load YOLO model and its configuration for YOLOv3
+net = cv2.dnn.readNet('yolov3.weights', 'yolov3.cfg')
+
+# Load COCO dataset names
+with open('coco.names', 'r') as f:
+    classes = f.read().strip().split('\n')
+
+# Initialize the webcam
+cap = cv2.VideoCapture(0)
+
+while True:
+    ret, frame = cap.read()
+
+    # Perform blob from the frame and forward pass through YOLO network
+    blob = cv2.dnn.blobFromImage(frame, 0.00392, (320, 320), (0, 0, 0), True, crop=False)
+    net.setInput(blob)
+    outs = net.forward(net.getUnconnectedOutLayersNames())
+
+    class_ids = []
+    confidences = []
+    boxes = []
+    Width = frame.shape[1]
+    Height = frame.shape[0]
+
+    for out in outs:
+        for detection in out:
+            scores = detection[5:]
+            class_id = np.argmax(scores)
+            confidence = scores[class_id]
+            if confidence > 0.5 and class_id == 67:  # Class 0 is for 'person' #67 for mobile
+                center_x, center_y, w, h = (detection[0:4] * np.array([Width, Height, Width, Height])).astype(int)
+                x = center_x - w // 2
+                y = center_y - h // 2
+                class_ids.append(class_id)
+                confidences.append(float(confidence))
+                boxes.append([x, y, w, h])
+
+    indexes = cv2.dnn.NMSBoxes(boxes, confidences, 0.5, 0.4)
+
+    person_detected = False
+
+    for i in range(len(boxes)):
+        if i in indexes:
+            x, y, w, h = boxes[i]
+            label = str(classes[class_ids[i]])
+            confidence = confidences[i]
+            color = (0, 255, 0)
+            cv2.rectangle(frame, (x, y), (x + w, y + h), color, 2)
+            cv2.putText(frame, label + " " + str(round(confidence, 2)), (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+            person_detected = True
+
+    if person_detected:
+        cv2.putText(frame, "Yes", (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+        ser.write(b'Y')  # Send 'Y' to Arduino
+    else:
+        cv2.putText(frame, "Nothing", (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+        ser.write(b'N')  # Send 'N' to Arduino
+
+    # Display the frame in a new window
+    cv2.imshow('Video Stream', frame)
+
+    # Check for a key press, and break the loop if 'q' is pressed
+    key = cv2.waitKey(1)
+    if key == ord('q'):
+        break
+
+# Release the capture object and close the OpenCV window
+cap.release()
+cv2.destroyAllWindows()
